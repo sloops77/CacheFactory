@@ -63,7 +63,16 @@ return /******/ (function(modules) { // webpackBootstrap
 /* 0 */
 /***/ function(module, exports, __webpack_require__) {
 
+	var _get = function get(_x, _x2, _x3) { var _again = true; _function: while (_again) { var object = _x, property = _x2, receiver = _x3; desc = parent = getter = undefined; _again = false; if (object === null) object = Function.prototype; var desc = Object.getOwnPropertyDescriptor(object, property); if (desc === undefined) { var parent = Object.getPrototypeOf(object); if (parent === null) { return undefined; } else { _x = parent; _x2 = property; _x3 = receiver; _again = true; continue _function; } } else if ('value' in desc) { return desc.value; } else { var getter = desc.get; if (getter === undefined) { return undefined; } return getter.call(receiver); } } };
+
+	var _createClass = (function () { function defineProperties(target, props) { for (var i = 0; i < props.length; i++) { var descriptor = props[i]; descriptor.enumerable = descriptor.enumerable || false; descriptor.configurable = true; if ('value' in descriptor) descriptor.writable = true; Object.defineProperty(target, descriptor.key, descriptor); } } return function (Constructor, protoProps, staticProps) { if (protoProps) defineProperties(Constructor.prototype, protoProps); if (staticProps) defineProperties(Constructor, staticProps); return Constructor; }; })();
+
+	function _inherits(subClass, superClass) { if (typeof superClass !== 'function' && superClass !== null) { throw new TypeError('Super expression must either be null or a function, not ' + typeof superClass); } subClass.prototype = Object.create(superClass && superClass.prototype, { constructor: { value: subClass, enumerable: false, writable: true, configurable: true } }); if (superClass) Object.setPrototypeOf ? Object.setPrototypeOf(subClass, superClass) : subClass.__proto__ = superClass; }
+
+	function _classCallCheck(instance, Constructor) { if (!(instance instanceof Constructor)) { throw new TypeError('Cannot call a class as a function'); } }
+
 	var BinaryHeap = __webpack_require__(1);
+
 	var _Promise = null;
 	try {
 	  _Promise = window.Promise;
@@ -130,6 +139,119 @@ return /******/ (function(modules) { // webpackBootstrap
 	  return keySet;
 	};
 
+	var BaseLruStrategy = (function () {
+	  function BaseLruStrategy() {
+	    _classCallCheck(this, BaseLruStrategy);
+
+	    this.$$lruHeap = new BinaryHeap(function (x) {
+	      return x.accessed;
+	    }, utils.equals);
+	  }
+
+	  /**
+	   * the object returned by priorityQueue() must implement
+	   * size() - the number of items being tracked
+	   * peek() - which returns next item to remove
+	   * removeAll() - which resets underlying tracking mechanism
+	   */
+
+	  _createClass(BaseLruStrategy, [{
+	    key: 'priorityQueue',
+	    value: function priorityQueue() {
+	      return this.$$lruHeap;
+	    }
+	  }]);
+
+	  return BaseLruStrategy;
+	})();
+
+	var DefaultLruStrategy = (function (_BaseLruStrategy) {
+	  _inherits(DefaultLruStrategy, _BaseLruStrategy);
+
+	  function DefaultLruStrategy() {
+	    _classCallCheck(this, DefaultLruStrategy);
+
+	    _get(Object.getPrototypeOf(DefaultLruStrategy.prototype), 'constructor', this).call(this);
+	  }
+
+	  _createClass(DefaultLruStrategy, [{
+	    key: 'onGet',
+	    value: function onGet(key, item) {
+	      var now = Date.now();
+	      this.$$lruHeap.remove(item);
+	      item.accessed = now;
+	      this.$$lruHeap.push(item);
+	      return true;
+	    }
+	  }, {
+	    key: 'onPut',
+	    value: function onPut(key, item) {
+	      this.$$lruHeap.push(item);
+	    }
+	  }, {
+	    key: 'onRemove',
+	    value: function onRemove(key, item) {
+	      this.$$lruHeap.remove(item);
+	    }
+	  }]);
+
+	  return DefaultLruStrategy;
+	})(BaseLruStrategy);
+
+	var StorageLruStrategy = (function (_BaseLruStrategy2) {
+	  _inherits(StorageLruStrategy, _BaseLruStrategy2);
+
+	  function StorageLruStrategy() {
+	    _classCallCheck(this, StorageLruStrategy);
+
+	    _get(Object.getPrototypeOf(StorageLruStrategy.prototype), 'constructor', this).call(this);
+	  }
+
+	  _createClass(StorageLruStrategy, [{
+	    key: 'onGet',
+	    value: function onGet(key, item) {
+	      var now = Date.now();
+	      this.$$lruHeap.remove({
+	        key: key,
+	        accessed: item.accessed
+	      });
+	      item.accessed = now;
+	      this.$$lruHeap.push({
+	        key: key,
+	        accessed: now
+	      });
+	      return true;
+	    }
+	  }, {
+	    key: 'onPut',
+	    value: function onPut(key, item) {
+	      this.$$lruHeap.push({
+	        key: key,
+	        accessed: item.accessed
+	      });
+	    }
+	  }, {
+	    key: 'onRemove',
+	    value: function onRemove(key, item) {
+	      this.$$lruHeap.remove({
+	        key: key,
+	        accessed: item.accessed
+	      });
+	    }
+	  }]);
+
+	  return StorageLruStrategy;
+	})(BaseLruStrategy);
+
+	var lru = {
+	  'default': function _default() {
+	    return new DefaultLruStrategy();
+	  },
+	  withStorage: function withStorage() {
+	    return new StorageLruStrategy();
+	  }
+	};
+
 	var defaults = {
 	  capacity: Number.MAX_VALUE,
 	  maxAge: Number.MAX_VALUE,
@@ -142,7 +264,8 @@ return /******/ (function(modules) { // webpackBootstrap
 	  disabled: false,
 	  storagePrefix: 'cachefactory.caches.',
 	  storeOnResolve: false,
-	  storeOnReject: false
+	  storeOnReject: false,
+	  replacementStrategy: lru
 	};
 
 	var caches = {};
@@ -157,11 +280,9 @@ return /******/ (function(modules) { // webpackBootstrap
 	  var $$data = {};
 	  var $$promises = {};
 	  var $$storage = null;
+	  var $$replacementStrategy = null;
 	  var $$expiresHeap = new BinaryHeap(function (x) {
 	    return x.expires;
-	  }, utils.equals);
-	  var $$lruHeap = new BinaryHeap(function (x) {
-	    return x.accessed;
 	  }, utils.equals);
 
 	  var cache = caches[cacheId] = {
@@ -178,7 +299,7 @@ return /******/ (function(modules) { // webpackBootstrap
 	      }
 	      $$storage = null;
 	      $$data = null;
-	      $$lruHeap = null;
+	      $$replacementStrategy = null;
 	      $$expiresHeap = null;
 	      this.$$prefix = null;
 	      delete caches[this.$$id];
@@ -230,48 +351,15 @@ return /******/ (function(modules) { // webpackBootstrap
 	        throw new Error('options.onExpire must be a function!');
 	      }
 
-	      var item = undefined;
-
-	      if ($$storage) {
-	        if ($$promises[key]) {
-	          return $$promises[key];
-	        }
-
-	        var itemJson = $$storage().getItem(this.$$prefix + '.data.' + key);
-
-	        if (itemJson) {
-	          item = utils.fromJson(itemJson);
-	        } else {
-	          return;
-	        }
-	      } else {
-	        if (!(key in $$data)) {
-	          return;
-	        }
-
-	        item = $$data[key];
+	      var item = this.doGetItem(key);
+	      if (!item || _isPromiseLike(item)) {
+	        return item;
 	      }
+
+	      var modified = $$replacementStrategy.onGet(key, item);
 
 	      var value = item.value;
-	      var now = new Date().getTime();
-
-	      if ($$storage) {
-	        $$lruHeap.remove({
-	          key: key,
-	          accessed: item.accessed
-	        });
-	        item.accessed = now;
-	        $$lruHeap.push({
-	          key: key,
-	          accessed: now
-	        });
-	      } else {
-	        $$lruHeap.remove(item);
-	        item.accessed = now;
-	        $$lruHeap.push(item);
-	      }
-
-	      if (this.$$deleteOnExpire === 'passive' && 'expires' in item && item.expires < now) {
+	      if (this.$$deleteOnExpire === 'passive' && 'expires' in item && item.expires < Date.now()) {
 	        this.remove(key);
 
 	        if (this.$$onExpire) {
@@ -280,7 +368,7 @@ return /******/ (function(modules) { // webpackBootstrap
 	          options.onExpire.call(this, key, item.value);
 	        }
 	        value = undefined;
-	      } else if ($$storage) {
+	      } else if ($$storage && modified) {
 	        $$storage().setItem(this.$$prefix + '.data.' + key, JSON.stringify(item));
 	      }
 
@@ -330,7 +418,7 @@ return /******/ (function(modules) { // webpackBootstrap
 	          storageMode: this.$$storageMode,
 	          storageImpl: $$storage ? $$storage() : undefined,
 	          disabled: !!this.$$disabled,
-	          size: $$lruHeap && $$lruHeap.size() || 0
+	          size: $$replacementStrategy && $$replacementStrategy.priorityQueue().size() || 0
 	        };
 	      }
 	    },
@@ -440,10 +528,7 @@ return /******/ (function(modules) { // webpackBootstrap
 	          expires: item.expires
 	        });
 	        // Add to lru heap
-	        $$lruHeap.push({
-	          key: key,
-	          accessed: item.accessed
-	        });
+	        $$replacementStrategy.onPut(key, item);
 	        // Set item
 	        $$storage().setItem(this.$$prefix + '.data.' + key, JSON.stringify(item));
 	        var exists = false;
@@ -465,15 +550,16 @@ return /******/ (function(modules) { // webpackBootstrap
 	        // Add to expires heap
 	        $$expiresHeap.push(item);
 	        // Add to lru heap
-	        $$lruHeap.push(item);
+	        $$replacementStrategy.onPut(key, item);
 	        // Set item
 	        $$data[key] = item;
 	        delete $$promises[key];
 	      }
 
 	      // Handle exceeded capacity
-	      if ($$lruHeap.size() > this.$$capacity) {
-	        this.remove($$lruHeap.peek().key);
+	      var replacementQueue = $$replacementStrategy.priorityQueue();
+	      if (replacementQueue.size() > this.$$capacity) {
+	        this.remove(replacementQueue.peek().key);
 	      }
 
 	      return value;
@@ -487,10 +573,7 @@ return /******/ (function(modules) { // webpackBootstrap
 
 	        if (itemJson) {
 	          var item = utils.fromJson(itemJson);
-	          $$lruHeap.remove({
-	            key: key,
-	            accessed: item.accessed
-	          });
+	          $$replacementStrategy.onRemove(key, item);
 	          $$expiresHeap.remove({
 	            key: key,
 	            expires: item.expires
@@ -508,7 +591,7 @@ return /******/ (function(modules) { // webpackBootstrap
 	        }
 	      } else {
 	        var value = $$data[key] ? $$data[key].value : undefined;
-	        $$lruHeap.remove($$data[key]);
+	        $$replacementStrategy.onRemove(key, $$data[key]);
 	        $$expiresHeap.remove($$data[key]);
 	        $$data[key] = null;
 	        delete $$data[key];
@@ -517,9 +600,11 @@ return /******/ (function(modules) { // webpackBootstrap
 	    },
 
 	    removeAll: function removeAll() {
+	      if ($$replacementStrategy) {
+	        $$replacementStrategy.priorityQueue().removeAll();
+	      }
+	      $$expiresHeap.removeAll();
 	      if ($$storage) {
-	        $$lruHeap.removeAll();
-	        $$expiresHeap.removeAll();
 	        var keysJson = $$storage().getItem(this.$$prefix + '.keys');
 
 	        if (keysJson) {
@@ -531,8 +616,6 @@ return /******/ (function(modules) { // webpackBootstrap
 	        }
 	        $$storage().setItem(this.$$prefix + '.keys', JSON.stringify([]));
 	      } else {
-	        $$lruHeap.removeAll();
-	        $$expiresHeap.removeAll();
 	        for (var key in $$data) {
 	          $$data[key] = null;
 	        }
@@ -604,8 +687,9 @@ return /******/ (function(modules) { // webpackBootstrap
 	        this.$$capacity = capacity;
 	      }
 	      var removed = {};
-	      while ($$lruHeap.size() > this.$$capacity) {
-	        removed[$$lruHeap.peek().key] = this.remove($$lruHeap.peek().key);
+	      var replacementQueue = $$replacementStrategy.priorityQueue();
+	      while (replacementQueue.size() > this.$$capacity) {
+	        removed[replacementQueue.peek().key] = this.remove(replacementQueue.peek().key);
 	      }
 	      return removed;
 	    },
@@ -715,9 +799,9 @@ return /******/ (function(modules) { // webpackBootstrap
 	      }
 
 	      if ('storageMode' in cacheOptions || 'storageImpl' in cacheOptions) {
-	        this.setStorageMode(cacheOptions.storageMode || defaults.storageMode, cacheOptions.storageImpl || defaults.storageImpl);
+	        this.setStorageMode(cacheOptions.storageMode || defaults.storageMode, cacheOptions.storageImpl || defaults.storageImpl, cacheOptions.replacementStrategy || defaults.replacementStrategy);
 	      } else if (strict) {
-	        this.setStorageMode(defaults.storageMode, defaults.storageImpl);
+	        this.setStorageMode(defaults.storageMode, defaults.storageImpl, defaults.replacementStrategy);
 	      }
 
 	      if ('storeOnResolve' in cacheOptions) {
@@ -791,7 +875,29 @@ return /******/ (function(modules) { // webpackBootstrap
 	      }
 	    },
 
-	    setStorageMode: function setStorageMode(storageMode, storageImpl) {
+	    doGetItem: function doGetItem(key) {
+	      if ($$storage) {
+	        if ($$promises[key]) {
+	          return $$promises[key];
+	        }
+
+	        var itemJson = $$storage().getItem(this.$$prefix + '.data.' + key);
+
+	        if (itemJson) {
+	          return utils.fromJson(itemJson);
+	        } else {
+	          return;
+	        }
+	      } else {
+	        if (!(key in $$data)) {
+	          return;
+	        }
+
+	        return $$data[key];
+	      }
+	    },
+
+	    setStorageMode: function setStorageMode(storageMode, storageImpl, replacementStrategy) {
 	      if (!utils.isString(storageMode)) {
 	        throw new Error('storageMode must be a string!');
 	      } else if (storageMode !== 'memory' && storageMode !== 'localStorage' && storageMode !== 'sessionStorage') {
@@ -801,16 +907,18 @@ return /******/ (function(modules) { // webpackBootstrap
 	      var shouldReInsert = false;
 	      var items = {};
 
-	      var keys = this.keys();
+	      if (typeof this.$$storageMode === 'string' && this.$$storageMode !== storageMode) {
+	        var keys = this.keys();
 
-	      if (keys.length) {
-	        for (var i = 0; i < keys.length; i++) {
-	          items[keys[i]] = this.get(keys[i]);
+	        if (keys.length) {
+	          for (var i = 0; i < keys.length; i++) {
+	            items[keys[i]] = this.get(keys[i]);
+	          }
+	          for (i = 0; i < keys.length; i++) {
+	            this.remove(keys[i]);
+	          }
+	          shouldReInsert = true;
 	        }
-	        for (i = 0; i < keys.length; i++) {
-	          this.remove(keys[i]);
-	        }
-	        shouldReInsert = true;
 	      }
 
 	      this.$$storageMode = storageMode;
@@ -852,9 +960,24 @@ return /******/ (function(modules) { // webpackBootstrap
 	        }
 	      }
 
+	      $$replacementStrategy = $$storage ? replacementStrategy.withStorage() : replacementStrategy['default']();
+
 	      if (shouldReInsert) {
 	        for (var key in items) {
 	          this.put(key, items[key]);
+	        }
+	      } else if ($$storage) {
+	        var keys = this.keys();
+	        if (keys.length) {
+	          for (var j = 0; j < keys.length; j++) {
+	            var k = keys[j];
+	            var item = this.doGetItem(k);
+	            $$replacementStrategy.onPut(k, item);
+	            $$expiresHeap.push({
+	              key: k,
+	              expires: item.expires
+	            });
+	          }
 	        }
 	      }
 	    },

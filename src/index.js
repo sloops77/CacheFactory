@@ -63,6 +63,90 @@ let _keySet = collection => {
   return keySet;
 };
 
+/**
+ * Replacement Strategies must implement onGet, onPut and onRemove callbacks and priorityQueue
+ * onGet -> Called after an item is retrieved from the cache by the client
+ * onPut -> Called after an item is added to the cache for the first time by the client.
+ *          Also called when reinitializing a cache from localStorage.
+ * onRemove -> Called after an item is removed from the cache by the client
+ * priorityQueue -> Retrieves an object that implements the following API
+ *     priorityQueue.size() - the number of items being tracked
+ *     priorityQueue.peek() - which returns next item to remove
+ *     priorityQueue.removeAll() - which resets underlying tracking mechanism
+ */
+class BaseLruStrategy {
+  constructor() {
+    this.$$lruHeap = new BinaryHeap(function (x) {
+      return x.accessed;
+    }, utils.equals);
+  }
+
+  priorityQueue() {
+    return this.$$lruHeap;
+  }
+}
+
+class DefaultLruStrategy extends BaseLruStrategy {
+  constructor() {
+    super();
+  }
+
+  onGet(key, item) {
+    let now = Date.now();
+    this.$$lruHeap.remove(item);
+    item.accessed = now;
+    this.$$lruHeap.push(item);
+    return true;
+  }
+  onPut(key, item) {
+    this.$$lruHeap.push(item);
+  }
+  onRemove(key, item) {
+    this.$$lruHeap.remove(item);
+  }
+}
+
+class StorageLruStrategy extends BaseLruStrategy {
+  constructor() {
+    super();
+  }
+
+  onGet(key, item) {
+    let now = Date.now();
+    this.$$lruHeap.remove({
+      key     : key,
+      accessed: item.accessed
+    });
+    item.accessed = now;
+    this.$$lruHeap.push({
+      key     : key,
+      accessed: now
+    });
+    return true;
+  }
+  onPut(key, item) {
+    this.$$lruHeap.push({
+      key     : key,
+      accessed: item.accessed
+    });
+  }
+  onRemove(key, item) {
+    this.$$lruHeap.remove({
+      key     : key,
+      accessed: item.accessed
+    });
+  }
+}
+
+let lru = {
+  default() {
+    return new DefaultLruStrategy();
+  },
+  withStorage() {
+    return new StorageLruStrategy();
+  }
+};
+
 let defaults = {
   capacity: Number.MAX_VALUE,
   maxAge: Number.MAX_VALUE,
@@ -75,7 +159,8 @@ let defaults = {
   disabled: false,
   storagePrefix: 'cachefactory.caches.',
   storeOnResolve: false,
-  storeOnReject: false
+  storeOnReject: false,
+  replacementStrategy: lru
 };
 
 let caches = {};
@@ -90,8 +175,8 @@ let createCache = (cacheId, options) => {
   let $$data = {};
   let $$promises = {};
   let $$storage = null;
+  let $$replacementStrategy = null;
   let $$expiresHeap = new BinaryHeap(x => x.expires, utils.equals);
-  let $$lruHeap = new BinaryHeap(x => x.accessed, utils.equals);
 
   let cache = caches[cacheId] = {
 
@@ -107,7 +192,7 @@ let createCache = (cacheId, options) => {
       }
       $$storage = null;
       $$data = null;
-      $$lruHeap = null;
+      $$replacementStrategy = null;
       $$expiresHeap = null;
       this.$$prefix = null;
       delete caches[this.$$id];
@@ -151,48 +236,15 @@ let createCache = (cacheId, options) => {
         throw new Error('options.onExpire must be a function!');
       }
 
-      let item;
-
-      if ($$storage) {
-        if ($$promises[key]) {
-          return $$promises[key];
-        }
-
-        let itemJson = $$storage().getItem(`${this.$$prefix}.data.${key}`);
-
-        if (itemJson) {
-          item = utils.fromJson(itemJson);
-        } else {
-          return;
-        }
-      } else {
-        if (!(key in $$data)) {
-          return;
-        }
-
-        item = $$data[key];
+      let item = this.doGetItem(key);
+      if (!item || _isPromiseLike(item)) {
+        return item;
       }
+
+      var modified = $$replacementStrategy.onGet(key, item);
 
       let value = item.value;
-      let now = new Date().getTime();
-
-      if ($$storage) {
-        $$lruHeap.remove({
-          key: key,
-          accessed: item.accessed
-        });
-        item.accessed = now;
-        $$lruHeap.push({
-          key: key,
-          accessed: now
-        });
-      } else {
-        $$lruHeap.remove(item);
-        item.accessed = now;
-        $$lruHeap.push(item);
-      }
-
-      if (this.$$deleteOnExpire === 'passive' && 'expires' in item && item.expires < now) {
+      if (this.$$deleteOnExpire === 'passive' && 'expires' in item && item.expires < Date.now()) {
         this.remove(key);
 
         if (this.$$onExpire) {
@@ -201,7 +253,7 @@ let createCache = (cacheId, options) => {
           options.onExpire.call(this, key, item.value);
         }
         value = undefined;
-      } else if ($$storage) {
+      } else if ($$storage && modified) {
         $$storage().setItem(`${this.$$prefix}.data.${key}`, JSON.stringify(item));
       }
 
@@ -251,7 +303,7 @@ let createCache = (cacheId, options) => {
           storageMode: this.$$storageMode,
           storageImpl: $$storage ? $$storage() : undefined,
           disabled: !!this.$$disabled,
-          size: $$lruHeap && $$lruHeap.size() || 0
+          size: $$replacementStrategy && $$replacementStrategy.priorityQueue().size() || 0
         };
       }
     },
@@ -359,10 +411,7 @@ let createCache = (cacheId, options) => {
           expires: item.expires
         });
         // Add to lru heap
-        $$lruHeap.push({
-          key: key,
-          accessed: item.accessed
-        });
+        $$replacementStrategy.onPut(key, item);
         // Set item
         $$storage().setItem(`${this.$$prefix}.data.${key}`, JSON.stringify(item));
         let exists = false;
@@ -384,15 +433,16 @@ let createCache = (cacheId, options) => {
         // Add to expires heap
         $$expiresHeap.push(item);
         // Add to lru heap
-        $$lruHeap.push(item);
+        $$replacementStrategy.onPut(key, item);
         // Set item
         $$data[key] = item;
         delete $$promises[key];
       }
 
       // Handle exceeded capacity
-      if ($$lruHeap.size() > this.$$capacity) {
-        this.remove($$lruHeap.peek().key);
+      let replacementQueue = $$replacementStrategy.priorityQueue();
+      if (replacementQueue.size() > this.$$capacity) {
+        this.remove(replacementQueue.peek().key);
       }
 
       return value;
@@ -406,10 +456,7 @@ let createCache = (cacheId, options) => {
 
         if (itemJson) {
           let item = utils.fromJson(itemJson);
-          $$lruHeap.remove({
-            key: key,
-            accessed: item.accessed
-          });
+          $$replacementStrategy.onRemove(key, item);
           $$expiresHeap.remove({
             key: key,
             expires: item.expires
@@ -427,7 +474,7 @@ let createCache = (cacheId, options) => {
         }
       } else {
         let value = $$data[key] ? $$data[key].value : undefined;
-        $$lruHeap.remove($$data[key]);
+        $$replacementStrategy.onRemove(key, $$data[key]);
         $$expiresHeap.remove($$data[key]);
         $$data[key] = null;
         delete $$data[key];
@@ -436,9 +483,11 @@ let createCache = (cacheId, options) => {
     },
 
     removeAll() {
+      if ($$replacementStrategy) {
+        $$replacementStrategy.priorityQueue().removeAll();
+      }
+      $$expiresHeap.removeAll();
       if ($$storage) {
-        $$lruHeap.removeAll();
-        $$expiresHeap.removeAll();
         let keysJson = $$storage().getItem(`${this.$$prefix}.keys`);
 
         if (keysJson) {
@@ -450,8 +499,6 @@ let createCache = (cacheId, options) => {
         }
         $$storage().setItem(`${this.$$prefix}.keys`, JSON.stringify([]));
       } else {
-        $$lruHeap.removeAll();
-        $$expiresHeap.removeAll();
         for (var key in $$data) {
           $$data[key] = null;
         }
@@ -523,8 +570,9 @@ let createCache = (cacheId, options) => {
         this.$$capacity = capacity;
       }
       let removed = {};
-      while ($$lruHeap.size() > this.$$capacity) {
-        removed[$$lruHeap.peek().key] = this.remove($$lruHeap.peek().key);
+      let replacementQueue = $$replacementStrategy.priorityQueue();
+      while (replacementQueue.size() > this.$$capacity) {
+        removed[replacementQueue.peek().key] = this.remove(replacementQueue.peek().key);
       }
       return removed;
     },
@@ -632,9 +680,9 @@ let createCache = (cacheId, options) => {
       }
 
       if ('storageMode' in cacheOptions || 'storageImpl' in cacheOptions) {
-        this.setStorageMode(cacheOptions.storageMode || defaults.storageMode, cacheOptions.storageImpl || defaults.storageImpl);
+        this.setStorageMode(cacheOptions.storageMode || defaults.storageMode, cacheOptions.storageImpl || defaults.storageImpl, cacheOptions.replacementStrategy || defaults.replacementStrategy);
       } else if (strict) {
-        this.setStorageMode(defaults.storageMode, defaults.storageImpl);
+        this.setStorageMode(defaults.storageMode, defaults.storageImpl, defaults.replacementStrategy);
       }
 
       if ('storeOnResolve' in cacheOptions) {
@@ -708,7 +756,29 @@ let createCache = (cacheId, options) => {
       }
     },
 
-    setStorageMode(storageMode, storageImpl) {
+    doGetItem(key) {
+      if ($$storage) {
+        if ($$promises[key]) {
+          return $$promises[key];
+        }
+
+        let itemJson = $$storage().getItem(this.$$prefix + '.data.' + key);
+
+        if (itemJson) {
+          return utils.fromJson(itemJson);
+        } else {
+          return;
+        }
+      } else {
+        if (!(key in $$data)) {
+          return;
+        }
+
+        return $$data[key];
+      }
+    },
+
+    setStorageMode(storageMode, storageImpl, replacementStrategy) {
       if (!utils.isString(storageMode)) {
         throw new Error('storageMode must be a string!');
       } else if (storageMode !== 'memory' && storageMode !== 'localStorage' && storageMode !== 'sessionStorage') {
@@ -718,18 +788,20 @@ let createCache = (cacheId, options) => {
       let shouldReInsert = false;
       let items = {};
 
-      let keys = this.keys();
+      if (typeof this.$$storageMode === 'string' && this.$$storageMode !== storageMode) {
+        let keys = this.keys();
 
-      if (keys.length) {
-        for (var i = 0; i < keys.length; i++) {
-          items[keys[i]] = this.get(keys[i]);
+        if (keys.length) {
+          for (var i = 0; i < keys.length; i++) {
+            items[keys[i]] = this.get(keys[i]);
+          }
+          for (i = 0; i < keys.length; i++) {
+            this.remove(keys[i]);
+          }
+          shouldReInsert = true;
         }
-        for (i = 0; i < keys.length; i++) {
-          this.remove(keys[i]);
-        }
-        shouldReInsert = true;
       }
-      
+
       this.$$storageMode = storageMode;
 
       if (storageImpl) {
@@ -763,9 +835,24 @@ let createCache = (cacheId, options) => {
         }
       }
 
+      $$replacementStrategy = $$storage ? replacementStrategy.withStorage() : replacementStrategy.default();
+
       if (shouldReInsert) {
         for (var key in items) {
           this.put(key, items[key]);
+        }
+      } else if ($$storage) {
+        let keys = this.keys();
+        if (keys.length) {
+          for (var j = 0; j < keys.length; j++) {
+            let k = keys[j];
+            let item = this.doGetItem(k);
+            $$replacementStrategy.onPut(k, item);
+            $$expiresHeap.push({
+              key: k,
+              expires: item.expires
+            });
+          }
         }
       }
     },

@@ -26,6 +26,7 @@ describe('CacheFactory.info()', function () {
     assert.equal(info.recycleFreq, CACHE_DEFAULTS.recycleFreq);
     assert.equal(info.storageMode, CACHE_DEFAULTS.storageMode);
     assert.equal(info.storageImpl, CACHE_DEFAULTS.storageImpl);
+    assert.isNotNull(info.replacementStrategy);
 
     assert.equal(info.caches.cache.id, caches[0].info().id);
     assert.equal(info.caches.cache.capacity, caches[0].info().capacity);
